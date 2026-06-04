@@ -262,8 +262,13 @@ select.input{appearance:none;-webkit-appearance:none;background-image:url("data:
       </div>
     </div>
 
+    <div class="sec-head"><h2>Net worth</h2><span class="link" onclick="go('insights')">Trend →</span></div>
+    <div class="card" id="networth-card" style="padding:16px"></div>
+
     <div class="sec-head"><h2>Monthly budget</h2><span class="link" onclick="openSettings()">Edit</span></div>
     <div class="budget-card" id="budget-card"></div>
+
+    <div id="cat-budgets-wrap"></div>
 
     <div class="sec-head"><h2>Spending breakdown</h2><span class="link" onclick="go('insights')">Full insights →</span></div>
     <div id="home-breakdown"></div>
@@ -456,6 +461,9 @@ select.input{appearance:none;-webkit-appearance:none;background-image:url("data:
   <div class="field"><label>Monthly budget</label><div class="amt-input"><span>₦</span><input id="set-budget" type="number" inputmode="decimal" placeholder="0" /></div></div>
   <div class="field"><label>Stock price key — optional</label><input class="input" id="set-finnhub" placeholder="Finnhub key for reliable stock prices" /><div style="font-size:12px;color:var(--faint);margin-top:6px">Crypto prices work without this. For stocks/ETFs, a free key from finnhub.io makes quotes reliable. Leave blank to use the free fallback.</div></div>
   <div class="field"><label>USD → ₦ rate — optional</label><div class="amt-input"><span>₦</span><input id="set-fx" type="number" inputmode="decimal" placeholder="e.g. 1650" /></div><div style="font-size:12px;color:var(--faint);margin-top:6px">Used to fold $ holdings into your ₦ total. Leave blank to auto-fetch the live rate; set it yourself to use the parallel/market rate you prefer.</div></div>
+  <div class="set-row"><div class="l"><b>Category budgets</b><small>Set a monthly limit per category</small></div><button class="mini-btn" onclick="openBudgets()">Set</button></div>
+  <div class="set-row"><div class="l"><b>Recurring transactions</b><small>Rent, subscriptions, allowance…</small></div><button class="mini-btn" onclick="openRecurring()">Manage</button></div>
+  <div class="set-row"><div class="l"><b>Learned import rules</b><small>What the importer has memorised</small></div><button class="mini-btn" onclick="openRules()">View</button></div>
   <div class="set-row"><div class="l"><b>Export backup</b><small>Save all your data as a file</small></div><button class="mini-btn" onclick="exportData()">Export</button></div>
   <div class="set-row"><div class="l"><b>Import backup</b><small>Restore from a file</small></div><label class="mini-btn" for="import-file" style="cursor:pointer">Import</label></div>
   <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
@@ -464,6 +472,49 @@ select.input{appearance:none;-webkit-appearance:none;background-image:url("data:
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Category budgets sheet -->
+<div class="sheet" id="sheet-budgets">
+  <div class="grip"></div>
+  <h2>Category budgets</h2>
+  <div class="sub">Monthly limit per category. Leave blank for no limit.</div>
+  <div id="budgets-fields"></div>
+  <button class="btn" onclick="saveBudgets()">Save budgets</button>
+</div>
+
+<!-- Recurring sheet -->
+<div class="sheet" id="sheet-recurring">
+  <div class="grip"></div>
+  <h2 id="rec-title">Recurring</h2>
+  <div class="sub">These post automatically when due.</div>
+  <div class="field">
+    <div class="toggle">
+      <button id="rec-tg-exp" onclick="setRecType('expense')">Expense</button>
+      <button id="rec-tg-inc" onclick="setRecType('income')">Income</button>
+    </div>
+  </div>
+  <div class="field"><label>What for</label><input class="input" id="rec-name" placeholder="e.g. Rent, Netflix, Allowance" /></div>
+  <div class="field"><label>Amount</label><div class="amt-input"><span>₦</span><input id="rec-amount" type="number" inputmode="decimal" placeholder="0" /></div></div>
+  <div class="field"><label>Category</label><select class="input" id="rec-cat"></select></div>
+  <div class="field"><label>Repeats</label>
+    <select class="input" id="rec-freq" onchange="syncRecFreq()"><option value="monthly">Every month</option><option value="weekly">Every week</option></select>
+  </div>
+  <div class="field" id="rec-dom-field"><label>Day of month</label><input class="input" id="rec-dom" type="number" min="1" max="31" inputmode="numeric" placeholder="e.g. 1" /></div>
+  <div class="field" id="rec-dow-field" style="display:none"><label>Day of week</label>
+    <select class="input" id="rec-dow"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select>
+  </div>
+  <button class="btn" onclick="saveRecurring()" id="rec-save-btn">Add recurring</button>
+  <button class="btn danger" id="rec-delete-btn" onclick="deleteCurrentRecurring()" style="display:none;margin-top:8px">Delete</button>
+  <div id="rec-list" style="margin-top:18px"></div>
+</div>
+
+<!-- Learned rules sheet -->
+<div class="sheet" id="sheet-rules">
+  <div class="grip"></div>
+  <h2>Learned import rules</h2>
+  <div class="sub">When you fix a category during import, Kobo remembers it here.</div>
+  <div id="rules-list"></div>
+</div>
 
 <!-- Import statement sheet -->
 <div class="sheet" id="sheet-import">
@@ -524,8 +575,10 @@ const DEFAULTS = {
   transactions: [],
   goals: [],
   investments: [],
+  recurring: [],
   rules: {},
-  settings: { monthlyBudget: 0 }
+  netWorthHist: {},
+  settings: { monthlyBudget: 0, catBudgets: {} }
 };
 let state = load();
 let editingTxId = null, editingGoalId = null, editingInvId = null, contribGoalId = null;
@@ -537,12 +590,12 @@ let lastParsed = null;
 function load(){
   try{
     const raw = localStorage.getItem(KEY);
-    if(raw) return Object.assign({}, DEFAULTS, JSON.parse(raw));
+    if(raw){ const d=Object.assign({}, DEFAULTS, JSON.parse(raw)); d.settings=Object.assign({}, DEFAULTS.settings, d.settings||{}); d.settings.catBudgets=d.settings.catBudgets||{}; d.recurring=d.recurring||[]; d.rules=d.rules||{}; d.netWorthHist=d.netWorthHist||{}; return d; }
   }catch(e){}
   return JSON.parse(JSON.stringify(DEFAULTS));
 }
 function save(){
-  try{ localStorage.setItem(KEY, JSON.stringify(state)); }
+  try{ snapshotNetWorth(); localStorage.setItem(KEY, JSON.stringify(state)); }
   catch(e){ toast('Could not save — storage blocked'); }
 }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
@@ -1089,6 +1142,21 @@ function renderHome(){
   document.getElementById('hero-bal').textContent=fmt(t.balance);
   document.getElementById('hero-inc').textContent=fmt(t.mInc);
   document.getElementById('hero-exp').textContent=fmt(t.mExp);
+  // net worth card
+  const nw=netWorth();
+  const series=netWorthSeries(7).filter(p=>p.v!=null);
+  let chgHtml='';
+  if(series.length>=2){
+    const prev=series[series.length-2].v, diff=nw-prev;
+    const pctc=prev?(diff/Math.abs(prev)*100):0;
+    chgHtml='<div class="ch '+(diff>=0?'pos':'neg')+'" style="font-size:13px;font-weight:700;margin-top:3px">'+(diff>=0?'▲ ':'▼ ')+fmt(Math.abs(diff))+' ('+(diff>=0?'+':'')+pctc.toFixed(1)+'%) vs last month</div>';
+  } else {
+    chgHtml='<div style="font-size:12px;color:var(--faint);margin-top:3px">Cash + investments. A trend builds as months pass.</div>';
+  }
+  document.getElementById('networth-card').innerHTML=
+    '<div style="font-size:12.5px;color:var(--muted);font-weight:600">Total net worth</div>'+
+    '<div class="num" style="font-family:\'Bricolage Grotesque\';font-weight:800;font-size:30px;letter-spacing:-.02em;margin-top:2px">'+fmt(nw)+'</div>'+chgHtml+
+    '<div style="display:flex;gap:16px;margin-top:12px;font-size:12px;color:var(--muted)"><span>Cash <b class="num" style="color:var(--txt)">'+fmt(cashBalance())+'</b></span><span>Investments <b class="num" style="color:var(--txt)">'+fmt(investmentsNgn())+'</b></span></div>';
   // budget
   const bc=document.getElementById('budget-card');
   const b=state.settings.monthlyBudget||0;
@@ -1100,6 +1168,8 @@ function renderHome(){
   } else {
     bc.innerHTML='<div class="empty" style="padding:14px"><div style="font-size:13px">No budget set yet — <span class="link" style="color:var(--mint)" onclick="openSettings()">add one</span> to track your spending.</div></div>';
   }
+  // per-category budgets
+  renderCatBudgetsHome();
   // spending breakdown pie (this month)
   const mk=nowMonthKey(0);
   const monthExp=state.transactions.filter(x=>x.type==='expense'&&monthKey(x.date)===mk);
@@ -1111,6 +1181,23 @@ function renderHome(){
   const recent=[...state.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
   if(!recent.length){ list.innerHTML='<div class="empty"><div class="big">🎤</div>Tap the mic and say something like<br>"I spent 1450 on food"</div>'; return; }
   list.innerHTML=recent.map(txRow).join('');
+}
+function monthCatSpend(catId){
+  const mk=nowMonthKey(0); let s=0;
+  state.transactions.forEach(t=>{ if(t.type==='expense'&&t.cat===catId&&monthKey(t.date)===mk) s+=t.amount; });
+  return s;
+}
+function renderCatBudgetsHome(){
+  const cb=state.settings.catBudgets||{};
+  const ids=Object.keys(cb).filter(id=>cb[id]>0);
+  const wrap=document.getElementById('cat-budgets-wrap');
+  if(!ids.length){ wrap.innerHTML=''; return; }
+  let rows=ids.map(id=>{
+    const c=catById('expense',id), lim=cb[id], spent=monthCatSpend(id);
+    const pct=Math.min(100,(spent/lim)*100), cls=pct>=100?'over':pct>=80?'warn':'';
+    return '<div style="margin-bottom:13px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>'+c.emoji+' '+c.name+'</span><span class="num" style="color:var(--muted)">'+fmt(spent)+' / '+fmt(lim)+'</span></div><div class="bar"><i class="'+cls+'" style="width:'+pct+'%"></i></div></div>';
+  }).join('');
+  wrap.innerHTML='<div class="sec-head"><h2>Category budgets</h2><span class="link" onclick="openBudgets()">Edit</span></div><div class="card" style="padding:16px">'+rows+'</div>';
 }
 
 function txRow(t){
@@ -1231,20 +1318,203 @@ function spendDonut(txs, maxRows){
 
 function renderInsights(){
   const body=document.getElementById('insights-body');
+  const hasAny = state.transactions.length || state.investments.length;
+  // --- trends (always last 6 months, independent of the period toggle) ---
+  let trends='';
+  if(hasAny){
+    const nwLine=lineChartSVG(netWorthSeries(6));
+    trends+='<div class="card" style="padding:16px;margin-bottom:16px"><div style="font-size:13px;color:var(--muted);font-weight:600">Net worth trend</div>'+
+      '<div class="num" style="font-family:\'Bricolage Grotesque\';font-weight:800;font-size:24px;margin:2px 0 4px">'+fmt(netWorth())+'</div>'+
+      (nwLine||'<div style="font-size:12px;color:var(--faint);margin-top:6px">Builds month by month — check back as time passes.</div>')+'</div>';
+    const moS=monthlySeries(6);
+    const anySpend=moS.some(m=>m.exp>0);
+    trends+='<div class="card" style="padding:16px;margin-bottom:16px"><div style="font-size:13px;color:var(--muted);font-weight:600;margin-bottom:4px">Spending — last 6 months</div>'+
+      (anySpend?barChartSVG(moS,m=>m.exp,'#FF7A66'):'<div style="font-size:12px;color:var(--faint)">No spending logged yet.</div>')+'</div>';
+  }
+  // --- period breakdown (controlled by the toggle) ---
   let txs=state.transactions.filter(t=>t.type==='expense');
   if(insMonth!=='all'){ const mk=nowMonthKey(Number(insMonth)); txs=txs.filter(t=>monthKey(t.date)===mk); }
-  if(!txs.length){ body.innerHTML='<div class="empty"><div class="big">📊</div>No spending in this period yet.</div>'; return; }
-  // income vs expense
-  let inc=0,exp=0;
-  let allp=state.transactions;
-  if(insMonth!=='all'){ const mk=nowMonthKey(Number(insMonth)); allp=allp.filter(t=>monthKey(t.date)===mk); }
-  allp.forEach(t=>{ if(t.type==='income')inc+=t.amount; else exp+=t.amount; });
-  const mx=Math.max(inc,exp,1);
-  const cmp='<div class="card" style="padding:16px;margin-bottom:16px"><div style="font-size:13px;color:var(--muted);font-weight:600;margin-bottom:12px">Income vs Spending</div>'+
-    '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>Income</span><span class="pos num">'+fmt(inc)+'</span></div><div class="bar"><i style="width:'+(inc/mx*100)+'%"></i></div></div>'+
-    '<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>Spending</span><span class="neg num">'+fmt(exp)+'</span></div><div class="bar"><i class="over" style="width:'+(exp/mx*100)+'%"></i></div></div></div>';
-  body.innerHTML=cmp+spendDonut(txs);
+  let periodHtml='';
+  if(!txs.length){ periodHtml='<div class="empty"><div class="big">📊</div>No spending in this period yet.</div>'; }
+  else {
+    let inc=0,exp=0;
+    let allp=state.transactions;
+    if(insMonth!=='all'){ const mk=nowMonthKey(Number(insMonth)); allp=allp.filter(t=>monthKey(t.date)===mk); }
+    allp.forEach(t=>{ if(t.type==='income')inc+=t.amount; else exp+=t.amount; });
+    const mx=Math.max(inc,exp,1);
+    const cmp='<div class="card" style="padding:16px;margin-bottom:16px"><div style="font-size:13px;color:var(--muted);font-weight:600;margin-bottom:12px">Income vs Spending</div>'+
+      '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>Income</span><span class="pos num">'+fmt(inc)+'</span></div><div class="bar"><i style="width:'+(inc/mx*100)+'%"></i></div></div>'+
+      '<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>Spending</span><span class="neg num">'+fmt(exp)+'</span></div><div class="bar"><i class="over" style="width:'+(exp/mx*100)+'%"></i></div></div></div>';
+    periodHtml=cmp+spendDonut(txs);
+  }
+  if(!hasAny){ body.innerHTML='<div class="empty"><div class="big">📊</div>Add transactions or holdings to see insights.</div>'; return; }
+  body.innerHTML=trends+periodHtml;
 }
+
+/* ============ NET WORTH + CHARTS ============ */
+function cashBalance(){ let inc=0,exp=0; state.transactions.forEach(t=>{ if(t.type==='income')inc+=t.amount; else exp+=t.amount; }); return inc-exp; }
+function investmentsNgn(){ let ngn=0,usd=0; state.investments.forEach(v=>{ const val=holdingValue(v); if(v.cur==='$')usd+=val; else ngn+=val; }); const fx=getUsdNgn(); return ngn+(fx?usd*fx.rate:0); }
+function netWorth(){ return cashBalance()+investmentsNgn(); }
+function snapshotNetWorth(){ try{ const d=new Date(); const k=d.getFullYear()+'-'+d.getMonth(); state.netWorthHist=state.netWorthHist||{}; state.netWorthHist[k]=Math.round(netWorth()); }catch(e){} }
+function netWorthSeries(n){
+  const out=[];
+  for(let i=n-1;i>=0;i--){ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i); const k=d.getFullYear()+'-'+d.getMonth();
+    const v=(i===0)?Math.round(netWorth()):((state.netWorthHist&&state.netWorthHist[k]!=null)?state.netWorthHist[k]:null);
+    out.push({label:d.toLocaleDateString('en-NG',{month:'short'}), v, k});
+  }
+  return out;
+}
+function monthlySeries(n){
+  const out=[];
+  for(let i=n-1;i>=0;i--){ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i); const k=d.getFullYear()+'-'+d.getMonth();
+    let inc=0,exp=0; state.transactions.forEach(t=>{ if(monthKey(t.date)===k){ if(t.type==='income')inc+=t.amount; else exp+=t.amount; } });
+    out.push({label:d.toLocaleDateString('en-NG',{month:'short'}), inc, exp, net:inc-exp, k});
+  }
+  return out;
+}
+function barChartSVG(items, accessor, color){
+  const vals=items.map(accessor); const max=Math.max(...vals,1);
+  const W=320,H=150; const pad=22; const n=items.length||1; const slot=(W-pad*2)/n; const bw=Math.min(slot*0.55,34);
+  let svg='';
+  items.forEach((it,idx)=>{ const v=accessor(it); const h=(v/max)*(H-40); const x=pad+slot*idx+(slot-bw)/2; const y=H-22-h;
+    svg+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(h,2).toFixed(1)+'" rx="4" fill="'+color+'"/>';
+    svg+='<text x="'+(x+bw/2).toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle" fill="#5C6E63" font-size="10" font-family="Hanken Grotesk">'+it.label+'</text>';
+  });
+  return '<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+svg+'</svg>';
+}
+function lineChartSVG(items){
+  const present=items.filter(p=>p.v!=null);
+  if(present.length<2) return '';
+  const W=320,H=150,pad=24; const n=items.length;
+  const vals=present.map(p=>p.v); const max=Math.max(...vals), min=Math.min(...vals,0); const range=(max-min)||1;
+  const X=idx=>pad+(idx/(n-1))*(W-pad*2);
+  const Y=v=>H-24-((v-min)/range)*(H-44);
+  let path=[], dots='', labels='';
+  items.forEach((it,idx)=>{ if(it.v!=null){ path.push(X(idx).toFixed(1)+','+Y(it.v).toFixed(1)); dots+='<circle cx="'+X(idx).toFixed(1)+'" cy="'+Y(it.v).toFixed(1)+'" r="3" fill="#5BE584"/>'; }
+    labels+='<text x="'+X(idx).toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle" fill="#5C6E63" font-size="10" font-family="Hanken Grotesk">'+it.label+'</text>'; });
+  return '<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet"><polyline points="'+path.join(' ')+'" fill="none" stroke="#5BE584" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>'+dots+labels+'</svg>';
+}
+
+/* ============ CATEGORY BUDGETS ============ */
+function openBudgets(){
+  const cb=state.settings.catBudgets||{};
+  document.getElementById('budgets-fields').innerHTML=CATS.expense.map(c=>
+    '<div class="field"><label>'+c.emoji+' '+c.name+'</label><div class="amt-input"><span>₦</span><input id="cb-'+c.id+'" type="number" inputmode="decimal" placeholder="No limit" value="'+(cb[c.id]||'')+'"></div></div>').join('');
+  closeSheets(); openSheet('sheet-budgets');
+}
+function saveBudgets(){
+  const cb={};
+  CATS.expense.forEach(c=>{ const v=parseFloat(document.getElementById('cb-'+c.id).value); if(v>0) cb[c.id]=v; });
+  state.settings.catBudgets=cb; save(); closeSheets(); renderHome(); toast('Budgets saved ✓');
+}
+
+/* ============ RECURRING ============ */
+let editingRecId=null, recType='expense';
+function setRecType(t){ recType=t; document.getElementById('rec-tg-exp').className=t==='expense'?'on-exp':''; document.getElementById('rec-tg-inc').className=t==='income'?'on-inc':''; fillRecCats(); }
+function fillRecCats(){ document.getElementById('rec-cat').innerHTML=CATS[recType].map(c=>'<option value="'+c.id+'">'+c.emoji+' '+c.name+'</option>').join(''); }
+function syncRecFreq(){ const m=document.getElementById('rec-freq').value==='monthly'; document.getElementById('rec-dom-field').style.display=m?'block':'none'; document.getElementById('rec-dow-field').style.display=m?'none':'block'; }
+function openRecurring(){
+  editingRecId=null;
+  document.getElementById('rec-title').textContent='Recurring';
+  document.getElementById('rec-save-btn').textContent='Add recurring';
+  document.getElementById('rec-delete-btn').style.display='none';
+  document.getElementById('rec-name').value=''; document.getElementById('rec-amount').value='';
+  document.getElementById('rec-freq').value='monthly'; document.getElementById('rec-dom').value='1'; document.getElementById('rec-dow').value='1';
+  setRecType('expense'); syncRecFreq(); renderRecList();
+  closeSheets(); openSheet('sheet-recurring');
+}
+function resetRecForm(){
+  editingRecId=null;
+  document.getElementById('rec-title').textContent='Recurring';
+  document.getElementById('rec-save-btn').textContent='Add recurring';
+  document.getElementById('rec-delete-btn').style.display='none';
+  document.getElementById('rec-name').value=''; document.getElementById('rec-amount').value='';
+}
+function renderRecList(){
+  const list=document.getElementById('rec-list');
+  if(!state.recurring.length){ list.innerHTML='<div class="empty" style="padding:16px"><div style="font-size:13px">No recurring entries yet.</div></div>'; return; }
+  const dn=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  list.innerHTML='<div class="day-label">Your recurring</div><div class="card" style="padding:4px 14px">'+state.recurring.map(r=>{
+    const c=catById(r.type,r.cat); const when=r.freq==='weekly'?('Weekly · '+dn[r.dow]):('Monthly · day '+r.dom);
+    return '<div class="tx" onclick="editRecurring(\''+r.id+'\')"><div class="ic">'+c.emoji+'</div><div class="mid"><div class="c">'+escapeHtml(r.name)+'</div><div class="n">'+when+'</div></div><div class="amt '+(r.type==='income'?'pos':'neg')+'">'+(r.type==='income'?'+':'-')+fmt(r.amount)+'</div></div>';
+  }).join('')+'</div>';
+}
+function editRecurring(id){
+  const r=state.recurring.find(x=>x.id===id); if(!r)return;
+  editingRecId=id;
+  document.getElementById('rec-title').textContent='Edit recurring';
+  document.getElementById('rec-save-btn').textContent='Save changes';
+  document.getElementById('rec-delete-btn').style.display='block';
+  setRecType(r.type);
+  document.getElementById('rec-name').value=r.name; document.getElementById('rec-amount').value=r.amount;
+  document.getElementById('rec-cat').value=r.cat;
+  document.getElementById('rec-freq').value=r.freq; syncRecFreq();
+  if(r.freq==='weekly') document.getElementById('rec-dow').value=r.dow; else document.getElementById('rec-dom').value=r.dom;
+}
+function daysInMonth(y,m){ return new Date(y,m+1,0).getDate(); }
+function nextDueFor(freq,dom,dow){
+  const now=new Date(); now.setHours(0,0,0,0);
+  if(freq==='weekly'){ const d=new Date(now); d.setDate(d.getDate()+((dow-d.getDay()+7)%7)); return d.toISOString(); }
+  const day=Math.min(dom,daysInMonth(now.getFullYear(),now.getMonth()));
+  let d=new Date(now.getFullYear(),now.getMonth(),day);
+  if(d<now){ const m=now.getMonth()+1, y=now.getFullYear()+(m>11?1:0), mm=m%12; d=new Date(y,mm,Math.min(dom,daysInMonth(y,mm))); }
+  return d.toISOString();
+}
+function advanceDate(iso,freq,dom){
+  const d=new Date(iso);
+  if(freq==='weekly'){ d.setDate(d.getDate()+7); return d.toISOString(); }
+  let y=d.getFullYear(), m=d.getMonth()+1; if(m>11){m=0;y++;}
+  return new Date(y,m,Math.min(dom||d.getDate(),daysInMonth(y,m))).toISOString();
+}
+function saveRecurring(){
+  const name=document.getElementById('rec-name').value.trim();
+  const amount=parseFloat(document.getElementById('rec-amount').value);
+  const cat=document.getElementById('rec-cat').value;
+  const freq=document.getElementById('rec-freq').value;
+  const dom=parseInt(document.getElementById('rec-dom').value)||1;
+  const dow=parseInt(document.getElementById('rec-dow').value);
+  if(!name){ toast('What is it for?'); return; }
+  if(!amount||amount<=0){ toast('Enter an amount'); return; }
+  if(editingRecId){
+    const r=state.recurring.find(x=>x.id===editingRecId);
+    Object.assign(r,{type:recType,name,amount,cat,freq,dom,dow,nextDue:nextDueFor(freq,dom,dow)});
+  } else {
+    state.recurring.push({id:uid(),type:recType,name,amount,cat,freq,dom,dow,nextDue:nextDueFor(freq,dom,dow)});
+  }
+  save(); resetRecForm(); renderRecList(); toast('Saved ✓');
+}
+function deleteCurrentRecurring(){
+  state.recurring=state.recurring.filter(x=>x.id!==editingRecId);
+  save(); resetRecForm(); renderRecList(); toast('Removed');
+}
+function processRecurring(){
+  const today=new Date(); today.setHours(23,59,59,999);
+  let created=0;
+  (state.recurring||[]).forEach(r=>{
+    if(!r.nextDue){ r.nextDue=nextDueFor(r.freq,r.dom,r.dow); }
+    let guard=0;
+    while(new Date(r.nextDue)<=today && guard<120){
+      state.transactions.push({id:uid(),type:r.type,amount:r.amount,cat:r.cat,note:r.name,date:r.nextDue,source:'recurring'});
+      r.nextDue=advanceDate(r.nextDue,r.freq,r.dom);
+      created++; guard++;
+    }
+  });
+  if(created>0){ save(); toast('Logged '+created+' recurring '+(created===1?'entry':'entries')); }
+}
+
+/* ============ LEARNED RULES ============ */
+function openRules(){
+  const list=document.getElementById('rules-list');
+  const ent=Object.entries(state.rules||{});
+  if(!ent.length){ list.innerHTML='<div class="empty" style="padding:24px"><div class="big">🧠</div>Nothing learned yet. Fix a category during an import and it\u2019ll show up here.</div>'; }
+  else {
+    list.innerHTML='<div class="card" style="padding:4px 14px">'+ent.map(([tok,r])=>{ const c=catById(r.type,r.cat); return '<div class="tx"><div class="ic">'+c.emoji+'</div><div class="mid"><div class="c">'+escapeHtml(tok)+'</div><div class="n">'+(r.type==='income'?'money in':'money out')+' → '+c.name+'</div></div><button class="del-x" onclick="deleteRule(this.getAttribute(\'data-t\'))" data-t="'+escapeHtml(tok)+'">Remove</button></div>'; }).join('')+'</div>'+
+      '<button class="btn danger" style="margin-top:14px" onclick="clearRules()">Clear all rules</button>';
+  }
+  closeSheets(); openSheet('sheet-rules');
+}
+function deleteRule(tok){ if(state.rules) delete state.rules[tok]; save(); openRules(); toast('Rule removed'); }
+function clearRules(){ if(confirm('Clear all learned rules?')){ state.rules={}; save(); openRules(); toast('Rules cleared'); } }
 
 /* ============ SETTINGS / DATA ============ */
 function openSettings(){ document.getElementById('set-budget').value=state.settings.monthlyBudget||''; document.getElementById('set-finnhub').value=state.settings.finnhubKey||''; document.getElementById('set-fx').value=state.settings.fxRate||''; openSheet('sheet-settings'); }
@@ -1603,6 +1873,7 @@ function toast(msg){
 }
 
 /* ============ INIT ============ */
+processRecurring();
 renderAll();
 </script>
 </body>
